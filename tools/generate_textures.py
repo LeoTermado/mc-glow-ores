@@ -1,0 +1,192 @@
+#!/usr/bin/env python3
+"""Procedurally generate original 16x16 ore textures for the Glow Ores pack.
+
+No Mojang/vanilla assets are read or copied — every pixel is generated here.
+
+Usage:
+    python generate_textures.py            # write textures + pack.png
+    python generate_textures.py --preview  # also stitch tools/preview.png
+"""
+
+import argparse
+import random
+from pathlib import Path
+
+from PIL import Image, ImageDraw
+
+SIZE = 16
+OUTPUT_DIR = Path(__file__).resolve().parent.parent / "pack" / "assets" / "minecraft" / "textures" / "block"
+PACK_ICON = Path(__file__).resolve().parent.parent / "pack" / "pack.png"
+PREVIEW_PATH = Path(__file__).resolve().parent / "preview.png"
+
+# Speckle color (R, G, B) and glow/outline color per ore.
+# Tweak these to adjust how each ore reads in-game.
+ORE_COLORS = {
+    "coal_ore":          {"speckle": (38, 38, 42),    "glow": (200, 200, 210)},
+    "iron_ore":          {"speckle": (216, 175, 147), "glow": (255, 230, 200)},
+    "copper_ore":        {"speckle": (224, 122, 80),  "glow": (255, 190, 130)},
+    "gold_ore":          {"speckle": (250, 210, 60),  "glow": (255, 255, 160)},
+    "redstone_ore":      {"speckle": (220, 30, 30),   "glow": (255, 110, 110)},
+    "lapis_ore":         {"speckle": (40, 80, 200),   "glow": (130, 180, 255)},
+    "diamond_ore":       {"speckle": (90, 230, 220),  "glow": (190, 255, 250)},
+    "emerald_ore":       {"speckle": (40, 200, 90),   "glow": (150, 255, 180)},
+    "nether_gold_ore":   {"speckle": (250, 210, 60),  "glow": (255, 255, 160)},
+    "nether_quartz_ore": {"speckle": (235, 230, 222), "glow": (255, 255, 255)},
+}
+
+OVERWORLD_ORES = [
+    "coal_ore", "iron_ore", "copper_ore", "gold_ore",
+    "redstone_ore", "lapis_ore", "diamond_ore", "emerald_ore",
+]
+NETHER_ORES = ["nether_gold_ore", "nether_quartz_ore"]
+
+# Background base tones (R, G, B) with per-pixel noise applied on top.
+STONE_BASE = (126, 126, 126)
+DEEPSLATE_BASE = (70, 70, 74)
+NETHERRACK_BASE = (97, 54, 52)
+
+
+def make_background(rng, base, noise=10):
+    """Neutral stone-like noise background with subtle per-pixel variation."""
+    img = Image.new("RGB", (SIZE, SIZE))
+    px = img.load()
+    for y in range(SIZE):
+        for x in range(SIZE):
+            n = rng.randint(-noise, noise)
+            px[x, y] = tuple(max(0, min(255, c + n)) for c in base)
+    return img
+
+
+def speckle_mask(rng):
+    """Pick a cluster of speckle pixels in the central area of the tile."""
+    mask = set()
+    # 3-4 blob seeds clustered near the middle, each grown into a small blob.
+    for _ in range(rng.randint(3, 4)):
+        cx, cy = rng.randint(4, 11), rng.randint(4, 11)
+        mask.add((cx, cy))
+        for _ in range(rng.randint(2, 4)):
+            dx, dy = rng.choice([(-1, 0), (1, 0), (0, -1), (0, 1), (1, 1), (-1, -1)])
+            nx, ny = cx + dx, cy + dy
+            if 3 <= nx <= 12 and 3 <= ny <= 12:
+                mask.add((nx, ny))
+                cx, cy = nx, ny
+    return mask
+
+
+def outline_of(mask):
+    """1px ring of pixels orthogonally adjacent to the speckles."""
+    ring = set()
+    for x, y in mask:
+        for dx, dy in [(-1, 0), (1, 0), (0, -1), (0, 1)]:
+            nx, ny = x + dx, y + dy
+            if 0 <= nx < SIZE and 0 <= ny < SIZE and (nx, ny) not in mask:
+                ring.add((nx, ny))
+    return ring
+
+
+def shade(color, rng, spread=18):
+    """Slightly vary a color so speckle blobs aren't flat."""
+    n = rng.randint(-spread, spread)
+    return tuple(max(0, min(255, c + n)) for c in color)
+
+
+def generate_texture(name, base, seed):
+    rng = random.Random(seed)
+    colors = ORE_COLORS[name.removeprefix("deepslate_")]
+    img = make_background(rng, base)
+    px = img.load()
+
+    mask = speckle_mask(rng)
+    # Bright high-contrast outline first, speckles drawn over the top.
+    for x, y in outline_of(mask):
+        px[x, y] = colors["glow"]
+    for x, y in mask:
+        px[x, y] = shade(colors["speckle"], rng)
+    return img
+
+
+def generate_all():
+    OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+    created = []
+    jobs = []
+    for ore in OVERWORLD_ORES:
+        jobs.append((ore, STONE_BASE))
+        jobs.append((f"deepslate_{ore}", DEEPSLATE_BASE))
+    for ore in NETHER_ORES:
+        jobs.append((ore, NETHERRACK_BASE))
+
+    for name, base in jobs:
+        img = generate_texture(name, base, seed=name)
+        path = OUTPUT_DIR / f"{name}.png"
+        img.save(path)
+        created.append(path)
+    return created
+
+
+def generate_pack_icon():
+    """128x128 icon: dark stone field with glowing ore speckles."""
+    rng = random.Random("glow-ores-icon")
+    img = Image.new("RGB", (128, 128))
+    px = img.load()
+    for y in range(128):
+        for x in range(128):
+            n = rng.randint(-8, 8)
+            px[x, y] = tuple(max(0, min(255, c + n)) for c in (58, 58, 64))
+
+    draw = ImageDraw.Draw(img)
+    glow_ores = ["diamond_ore", "gold_ore", "redstone_ore", "emerald_ore", "lapis_ore", "copper_ore"]
+    spots = [(28, 30), (84, 24), (50, 64), (96, 80), (24, 92), (66, 102)]
+    for ore, (cx, cy) in zip(glow_ores, spots):
+        c = ORE_COLORS[ore]
+        draw.ellipse([cx - 11, cy - 11, cx + 11, cy + 11], outline=c["glow"], width=3)
+        draw.ellipse([cx - 7, cy - 7, cx + 7, cy + 7], fill=c["speckle"])
+
+    img.save(PACK_ICON)
+    return PACK_ICON
+
+
+def generate_preview(texture_paths, scale=16, cols=6):
+    """Stitch all textures into one labeled grid, each tile scaled up."""
+    tile = SIZE * scale
+    label_h = 24
+    pad = 8
+    rows = (len(texture_paths) + cols - 1) // cols
+    sheet = Image.new(
+        "RGB",
+        (cols * (tile + pad) + pad, rows * (tile + label_h + pad) + pad),
+        (24, 24, 28),
+    )
+    draw = ImageDraw.Draw(sheet)
+
+    for i, path in enumerate(sorted(texture_paths)):
+        r, c = divmod(i, cols)
+        x = pad + c * (tile + pad)
+        y = pad + r * (tile + label_h + pad)
+        img = Image.open(path).resize((tile, tile), Image.NEAREST)
+        sheet.paste(img, (x, y))
+        draw.text((x + 2, y + tile + 4), path.stem, fill=(230, 230, 230))
+
+    sheet.save(PREVIEW_PATH)
+    return PREVIEW_PATH
+
+
+def main():
+    parser = argparse.ArgumentParser(description="Generate Glow Ores textures")
+    parser.add_argument("--preview", action="store_true",
+                        help="also stitch all textures into tools/preview.png")
+    args = parser.parse_args()
+
+    created = generate_all()
+    icon = generate_pack_icon()
+    print(f"Wrote {len(created)} textures to {OUTPUT_DIR}")
+    for p in created:
+        print(f"  {p.name}")
+    print(f"Wrote pack icon: {icon}")
+
+    if args.preview:
+        preview = generate_preview(created)
+        print(f"Wrote preview sheet: {preview}")
+
+
+if __name__ == "__main__":
+    main()
