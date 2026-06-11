@@ -2,7 +2,11 @@
 
 ## What it does
 
-A Minecraft Java Edition resource pack that adds glowing textures to ore blocks for improved visibility and aesthetic enhancement.
+Glow Ores is a resource pack for Minecraft Java Edition 26.1.2 that makes ore blocks glow.
+
+The ore part of each block — the speckles and their outline — emits light at full brightness, so ores stay visible even in pitch-black caves. The surrounding stone, deepslate, and netherrack stay normally lit. That's all it does: it helps you spot and mine ores in the dark.
+
+The glow uses Minecraft's native emissive block models (no OptiFine, no shaders, no mods required). It covers all 18 ore types: coal, iron, copper, gold, redstone, lapis, diamond, and emerald — each in its overworld and deepslate form — plus nether gold and nether quartz.
 
 ## Install
 
