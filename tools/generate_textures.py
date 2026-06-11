@@ -57,20 +57,44 @@ def make_background(rng, base, noise=10):
     return img
 
 
-def speckle_mask(rng):
-    """Pick a cluster of speckle pixels in the central area of the tile."""
-    mask = set()
-    # 3-4 blob seeds clustered near the middle, each grown into a small blob.
-    for _ in range(rng.randint(3, 4)):
-        cx, cy = rng.randint(4, 11), rng.randint(4, 11)
-        mask.add((cx, cy))
-        for _ in range(rng.randint(2, 4)):
-            dx, dy = rng.choice([(-1, 0), (1, 0), (0, -1), (0, 1), (1, 1), (-1, -1)])
-            nx, ny = cx + dx, cy + dy
-            if 3 <= nx <= 12 and 3 <= ny <= 12:
-                mask.add((nx, ny))
-                cx, cy = nx, ny
-    return mask
+def make_chunk(rng, cx, cy, size):
+    """Grow a compact irregular nugget of ~`size` connected pixels around (cx, cy).
+
+    Growth is clamped to a 5x5 box around the seed so nuggets stay chunky, and
+    to [2, 13] so the 1px outline never reaches the tile edge (clean tiling).
+    """
+    chunk = {(cx, cy)}
+    for _ in range(size * 8):
+        if len(chunk) >= size:
+            break
+        x, y = rng.choice(sorted(chunk))
+        dx, dy = rng.choice([(-1, 0), (1, 0), (0, -1), (0, 1)])
+        nx, ny = x + dx, y + dy
+        if 2 <= nx <= 13 and 2 <= ny <= 13 and abs(nx - cx) <= 2 and abs(ny - cy) <= 2:
+            chunk.add((nx, ny))
+    return chunk
+
+
+def ore_chunks(rng):
+    """Scatter 3-5 separate ore nuggets of varied size across the tile.
+
+    Chunks keep a >=3px Chebyshev gap from each other so every nugget gets its
+    own distinct outline ring.
+    """
+    chunks = []
+    occupied = set()
+    target = rng.randint(3, 5)
+    for _ in range(200):
+        if len(chunks) >= target:
+            break
+        cx, cy = rng.randint(3, 12), rng.randint(3, 12)
+        chunk = make_chunk(rng, cx, cy, size=rng.randint(3, 8))
+        if any(abs(x - ox) <= 2 and abs(y - oy) <= 2
+               for x, y in chunk for ox, oy in occupied):
+            continue
+        chunks.append(chunk)
+        occupied |= chunk
+    return chunks
 
 
 def outline_of(mask):
@@ -90,6 +114,11 @@ def shade(color, rng, spread=18):
     return tuple(max(0, min(255, c + n)) for c in color)
 
 
+def tint(color, amount):
+    """Uniformly brighten (+) or darken (-) a color."""
+    return tuple(max(0, min(255, c + amount)) for c in color)
+
+
 def generate_texture(name, base, seed):
     """Return (base_img, glow_img).
 
@@ -103,15 +132,25 @@ def generate_texture(name, base, seed):
     glow = Image.new("RGBA", (SIZE, SIZE), (0, 0, 0, 0))
     px, gpx = img.load(), glow.load()
 
-    mask = speckle_mask(rng)
-    # Bright high-contrast outline first, speckles drawn over the top.
+    chunks = ore_chunks(rng)
+    mask = set().union(*chunks)
+    # Bright high-contrast outline first, ore chunks drawn over the top.
     for x, y in outline_of(mask):
         px[x, y] = colors["glow"]
         gpx[x, y] = colors["glow"] + (255,)
-    for x, y in mask:
-        c = shade(colors["speckle"], rng)
-        px[x, y] = c
-        gpx[x, y] = c + (255,)
+    # 2-tone shading per chunk: one bright core pixel, slightly darker body.
+    for chunk in chunks:
+        n = len(chunk)
+        cx = sum(x for x, _ in chunk) / n
+        cy = sum(y for _, y in chunk) / n
+        core = min(sorted(chunk), key=lambda p: (p[0] - cx) ** 2 + (p[1] - cy) ** 2)
+        for x, y in sorted(chunk):
+            if (x, y) == core:
+                c = tint(colors["speckle"], 45)
+            else:
+                c = shade(tint(colors["speckle"], -22), rng, spread=10)
+            px[x, y] = c
+            gpx[x, y] = c + (255,)
     return img, glow
 
 
