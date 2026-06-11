@@ -91,18 +91,28 @@ def shade(color, rng, spread=18):
 
 
 def generate_texture(name, base, seed):
+    """Return (base_img, glow_img).
+
+    base_img: full RGB ore tile (background + speckles + outline).
+    glow_img: RGBA emissive layer — only the speckles and outline are opaque,
+    everything else is alpha 0 so the stone background stays normally lit.
+    """
     rng = random.Random(seed)
     colors = ORE_COLORS[name.removeprefix("deepslate_")]
     img = make_background(rng, base)
-    px = img.load()
+    glow = Image.new("RGBA", (SIZE, SIZE), (0, 0, 0, 0))
+    px, gpx = img.load(), glow.load()
 
     mask = speckle_mask(rng)
     # Bright high-contrast outline first, speckles drawn over the top.
     for x, y in outline_of(mask):
         px[x, y] = colors["glow"]
+        gpx[x, y] = colors["glow"] + (255,)
     for x, y in mask:
-        px[x, y] = shade(colors["speckle"], rng)
-    return img
+        c = shade(colors["speckle"], rng)
+        px[x, y] = c
+        gpx[x, y] = c + (255,)
+    return img, glow
 
 
 def generate_all():
@@ -116,10 +126,12 @@ def generate_all():
         jobs.append((ore, NETHERRACK_BASE))
 
     for name, base in jobs:
-        img = generate_texture(name, base, seed=name)
-        path = OUTPUT_DIR / f"{name}.png"
-        img.save(path)
-        created.append(path)
+        base_img, glow_img = generate_texture(name, base, seed=name)
+        base_path = OUTPUT_DIR / f"{name}.png"
+        glow_path = OUTPUT_DIR / f"{name}_glow.png"
+        base_img.save(base_path)
+        glow_img.save(glow_path)
+        created.extend([base_path, glow_path])
     return created
 
 
@@ -162,8 +174,10 @@ def generate_preview(texture_paths, scale=16, cols=6):
         r, c = divmod(i, cols)
         x = pad + c * (tile + pad)
         y = pad + r * (tile + label_h + pad)
-        img = Image.open(path).resize((tile, tile), Image.NEAREST)
-        sheet.paste(img, (x, y))
+        img = Image.open(path).convert("RGBA")
+        backing = Image.new("RGBA", img.size, (10, 10, 12, 255))
+        img = Image.alpha_composite(backing, img).convert("RGB")
+        sheet.paste(img.resize((tile, tile), Image.NEAREST), (x, y))
         draw.text((x + 2, y + tile + 4), path.stem, fill=(230, 230, 230))
 
     sheet.save(PREVIEW_PATH)
